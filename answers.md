@@ -80,16 +80,39 @@ Static polymorphism using templates is super fast because the compiler figures e
 ## Errors, memory and concurrency
 
 ### 1. Error reporting without exceptions
-TODO
+
+- In firmware, we usually disable exceptions because they add hidden overhead. To report errors, return codes (like returning an *int* or *enum*) are the old-school C way, but they are risky because it's easy to accidentally ignore the return value and use garbage data.
+
+- *std::optional* is great when a function might just fail to return a value (like trying to read a disconnected I2C sensor), but it doesn't tell you why it failed.
+
+- *std::variant* lets you return either a good result type or an error type, but unpacking it can feel a bit clunky.
+
+- *std::expected* (from C++23) is the best of both worlds: it holds either the expected return value or an error code, and the compiler basically forces you to handle the error path clearly. 
 
 ### 2. Cost of `std::function`; heap-free alternative
-TODO
+
+- *std::function* is super flexible for storing callbacks, but it has a hidden cost: if the lambda or function you're passing captures too many variables, it won't fit inside *std::function*'s small internal buffer. When that happens, it secretly calls *new* to allocate memory on the heap.
+
+- In bare-metal firmware, hidden heap allocation is usually banned because it causes memory fragmentation. A heap-free alternative is to use a basic C-style function pointer along with a void* context pointer, or to write your own custom fixed-capacity wrapper that refuses to compile if the callback is too big.   
 
 ### 3. `reinterpret_cast<Packet*>(rx_buffer)`: aliasing, alignment, safe decoding
-TODO
+
+- No, it is definitely not safe. First, it breaks the "strict aliasing" rule, which means the compiler assumes pointers of different types don't point to the same memory. If you break this, the optimizer might accidentally delete your memory reads because it thinks they aren't connected.
+
+- Second, there's alignment: a raw byte buffer might start at an odd memory address, but a struct with a 32-bit integer inside it needs to start at an address cleanly divisible by 4. If you cast it directly on an ARM Cortex chip like an STM32, you will trigger a hardware fault and crash the board.
+
+- The safe way is to use *std::memcpy* (or *std::bit_cast* in C++20) to copy the raw bytes from the buffer directly into a properly aligned *Packet* struct.
 
 ### 4. `volatile` vs `std::atomic`; acquire/release guarantees
-TODO
+
+- *volatile* just tells the compiler, "hey, don't optimize out reads/writes to this variable because hardware (like an interrupt) might change it". But it does nothing to stop two RTOS threads from trying to read and write at the exact same millisecond, causing a data race, and it doesn't stop the CPU from reordering your instructions. *std::atomic* actually guarantees thread safety at the hardware level.
+
+- *memory_order_acquire* ensures that any memory reads written after it in the code actually happen after it in reality.
+
+- *memory_order_release* ensures that any memory writes written before it are completely finished and visible to other threads before the atomic variable gets updated.
 
 ### 5. Placement new and static memory pools
-TODO
+
+- Normally, *new* asks the operating system for a fresh chunk of heap memory. Placement *new* is a trick where you provide the memory address and say, "I already have this block of RAM, just run the constructor and build the object right here".
+
+- In firmware, we use this to build static memory pools. We pre-allocate a big raw byte array globally at compile time so we never touch the heap. Then, when we need to spin up a new task or buffer at runtime, we use placement new to safely construct it right inside that pre-allocated array.
