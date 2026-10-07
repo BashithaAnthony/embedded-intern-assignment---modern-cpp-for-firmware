@@ -1,6 +1,5 @@
 #pragma once
 // Task 1: strongly typed physical quantities.
-// A Quantity is "just an integer" at run time, but the compiler treats
 // millivolts, milliamps, milliseconds and deci-degrees as different types.
 
 #include <cstdint>

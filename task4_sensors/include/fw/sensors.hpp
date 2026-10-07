@@ -1,7 +1,6 @@
 #pragma once
-// Task 4: virtual vs CRTP sensor drivers (put each in its own header if you prefer).
-// TODO: implement.
-
-namespace fw {
-
-}  // namespace fw
+// Task 4 umbrella header: both sensor designs.
+#include "fw/sensor_crtp.hpp"
+#include "fw/sensor_models.hpp"
+#include "fw/sensor_types.hpp"
+#include "fw/sensor_virtual.hpp"
