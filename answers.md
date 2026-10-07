@@ -1,118 +1,198 @@
 # Part A: Knowledge check
 
-
 ## Object lifetime and resources
 
 ### 1. Rule of zero / three / five
 
-- Rule of Zero: If your class doesn't directly manage raw resources (like raw pointers or open hardware handles), you shouldn't write custom destructors, copy, or move constructors. Let the compiler generate the default ones.
+- **Rule of Zero:** If my class does not own a raw resource (raw pointer, open handle), I write no destructor, copy or move. The compiler's defaults are enough.
+- **Rule of Three:** If I need a custom destructor, I also need a custom copy constructor and copy assignment. Otherwise two objects can hold the same pointer and both free it (double free).
+- **Rule of Five:** Rule of Three plus a move constructor and move assignment, so the object can be moved cheaply. If I write a destructor or copy, the compiler does not make the moves, so moves silently become copies.
+- Most classes should follow Rule of Zero. Members like `std::array` and `std::unique_ptr` clean up by themselves, so fewer leaks.
 
-- Rule of Three: If your class manages a raw resource and needs a custom destructor to clean it up, you also need to write a custom copy constructor and copy assignment operator to prevent double-free errors.
-
-- Rule of Five: If you need the Rule of Three, you should also write a move constructor and move assignment operator so your class can be transferred efficiently without expensive copying.
-
-- Most classes should follow the Rule of Zero. It keeps the code much cleaner and pushes resource management down into standard containers or smart wrappers, which drastically reduces the chances of accidentally leaking memory when handling complex data like sensor arrays.
+```cpp
+struct SensorLog {
+    std::array<uint16_t, 64> samples{};   // Rule of Zero, nothing else needed
+};
+```
 
 ### 2. What does `std::move` actually do? Moved-from states
 
-- std::move doesn't actually move anything on its own. It just performs a cast to an rvalue reference (&&), telling the compiler, "I am done with this object, feel free to steal its resources."
+- `std::move` does not move anything. It only casts to an rvalue reference (`&&`) to say "I am done with this object". The move constructor / assignment does the real moving.
+- A moved-from `std::unique_ptr` is guaranteed to be `nullptr`.
+- A moved-from standard type (like `std::string`) is "valid but unspecified". I can destroy it or assign to it, but should not rely on what is inside.
+- In my own move constructor I must reset the source (e.g. set a pointer to `nullptr`), because raw pointers are just copied.
 
-- A moved-from *std::unique_ptr* is left completely empty, holding a *nullptr*.
-
-- A moved-from custom user type is left in a "valid but unspecified state." This means it is safe to destroy it or assign a new value to it, but you shouldn't try to read its data because you don't know what's left inside.
+```cpp
+auto a = std::make_unique<int>(5);
+auto b = std::move(a);   // a is nullptr now
+```
 
 ### 3. Why `noexcept` move constructors? Standard-library example
 
-- You mark move constructors with *noexcept* to promise the compiler that moving the object won't throw an error and crash the program halfway through.
+- `noexcept` promises the function will not throw.
+- When `std::vector` grows, it moves the old elements to the new buffer. If a move could throw halfway, the old data would be damaged. So `std::vector` only moves if the move constructor is `noexcept`.
+- If not, it copies every element instead, which wastes time and memory.
 
-- If a move constructor is not marked *noexcept*, *std::vector* will refuse to use it when resizing its internal buffer. Instead, *std::vector* will fall back to copying every single element to the new memory block just to be safe, which wastes a lot of CPU cycles.
+```cpp
+Buffer(Buffer&& other) noexcept;   // vector will move
+```
 
 ### 4. When must a base class have a virtual destructor?
 
-- A base class must have a virtual destructor if you ever plan to delete a derived class object through a base class pointer.
+- When I delete a derived object through a base class pointer.
+- Without `virtual` this is undefined behaviour. Usually only the base destructor runs, so something the derived class holds (like an open SPI bus) is never released.
 
-- If you don't make it virtual, the compiler only runs the base class's destructor. The derived class's destructor gets completely ignored. If that derived class was holding onto something specific—like an open UART port or an SPI buffer for a display—that resource will leak.
+```cpp
+struct Display { virtual ~Display() = default; };
+struct SpiDisplay : Display { ~SpiDisplay() override { /* release SPI */ } };
+Display* d = new SpiDisplay;
+delete d;   // calls ~SpiDisplay too, only because ~Display is virtual
+```
 
 ### 5. Static initialisation order problem and two fixes
 
-- The "Static Initialization Order Fiasco" happens when you have global variables in different source files, and one relies on the other. C++ doesn't guarantee which one initializes first. If your system tries to start a motor controller global before the GPIO pin global is ready, the board crashes before *main()* even starts.
+- Global objects in different `.cpp` files are initialised in an unknown order. A global `MotorController` may use a global `Gpio` that is not constructed yet. This happens before `main()`, so it is hard to debug.
+- **Fix 1:** Use `constexpr` / `constinit` so the value is set at compile time.
+- **Fix 2:** "Construct on first use". Make the object a `static` local inside a function. It is created the first time the function is called.
 
-- Fix 1: Use *constexpr* initialization so the values are baked in at compile time, completely bypassing the runtime initialization order.
-
-- Fix 2: Use the "Construct On First Use" idiom. Instead of a global variable, wrap it in a function that contains a *static* local variable and returns a reference to it. It will only initialize the exact moment you call it the first time.
+```cpp
+Gpio& gpio() {
+    static Gpio g{5};   // created on first call
+    return g;
+}
+```
 
 ## Polymorphism and templates
 
 ### 1. How a vtable works; RAM/flash cost per class and per object
 
-- A vtable is basically a hidden lookup table of function pointers that the compiler creates when you use virtual functions. When you call a virtual function, the program checks this table at runtime to figure out exactly which version of the function to run.
+- A vtable is a table of function pointers. There is one per class that has virtual functions. Each object has a hidden `vptr` pointing to its class's vtable. A virtual call reads the `vptr`, then the function pointer, then jumps to it.
+- **Flash (per class):** one vtable, about 4 bytes per virtual function on a 32-bit MCU, plus an RTTI entry.
+- **RAM (per object):** one `vptr`, 4 bytes on a 32-bit MCU, no matter how many virtual functions.
 
-- For the overhead, it adds one vtable per class into your flash memory, which is just a list of pointers. For your RAM, it adds one hidden pointer (called a *vptr*, usually 4 bytes on a 32-bit microcontroller) to every single object you create so the object knows where its vtable is. 
+```cpp
+struct A { int x; };                    // 4 bytes
+struct B { int x; virtual void f(); };  // 8 bytes on 32-bit (vptr + x)
+```
 
 ### 2. Static (templates, CRTP) vs dynamic (virtual) polymorphism
 
-Static polymorphism using templates is super fast because the compiler figures everything out in advance and can inline the code, meaning no runtime delays. However, it takes longer to compile and causes bigger code size (bloat) because the compiler generates a brand new copy of the function for every data type you use it with.
+- **Static:** the type is known at compile time, so the call can be inlined. No vtable, no runtime cost. But compile time is longer and each type gets its own copy of the code (bigger flash).
+- **Dynamic:** the type is chosen at runtime, so I can swap objects (like the active sensor). Code is smaller, but there is a `vptr` in RAM and a small cost per call.
+- CRTP means the base is a template that takes the derived class as its parameter, so the derived function is found at compile time.
 
-- Dynamic polymorphism (using virtual functions) gives you a lot of flexibility to swap out components at runtime—like changing which sensor is active—and keeps compile times and code size smaller. The downside is it is slightly slower at runtime because the processor has to look up the vtable every time a function is called.
+```cpp
+template <typename D>
+struct SensorBase { int read() { return static_cast<D*>(this)->readImpl(); } };
+struct TempSensor : SensorBase<TempSensor> { int readImpl() { return 25; } };
+```
 
 ### 3. Templates in headers; code bloat and how to limit it
 
-- Templates aren't actually compiled code yet; they are just blueprints. When you try to use a template in a *.cpp* file, the compiler needs to see the full blueprint right then and there to generate the specific version of that code, which is why the whole definition has to sit in the header file.
+- A template is only a blueprint. To make the real code for `Ring<int, 8>`, the compiler needs the full definition at that point, so it goes in the header.
+- Code bloat: every different type makes a new full copy of the code, so flash fills up.
+- To limit it, move the code that does not depend on `T` into a normal non-template base class, so it is compiled once. Removing unused code with `--gc-sections` also helps.
 
-- Code bloat happens when the compiler generates tons of almost identical, fully compiled copies of your template for all the different types you used, filling up your flash memory. You can limit it by moving the parts of the code that don't depend on the template parameters out into a regular, non-templated base class so that logic only gets compiled once.
+```cpp
+class RingBase { /* head, tail, index logic: compiled once */ };
+
+template <typename T, std::size_t N>
+class Ring : private RingBase { T data_[N]; };   // only this part is copied per type
+```
 
 ### 4. `const` vs `constexpr` vs `consteval`; a case where only `constexpr` works
 
-- *const* just means a variable cannot be modified once it is created, but its value might only be figured out at runtime.
+- `const`: cannot be changed after creation, but the value may be decided at runtime.
+- `constexpr`: a variable must be known at compile time. A function can run at compile time if the inputs are known, and runs normally at runtime otherwise.
+- `consteval`: the function must run at compile time, or it is a compile error.
+- Only `constexpr` works when one function is needed for both cases: a fixed delay at compile time and a delay from a sensor value at runtime.
 
-- *constexpr* tells the compiler "if you know all the inputs right now, calculate this at compile time to save CPU cycles, but if the inputs only arrive at runtime, calculate it normally then".
+```cpp
+constexpr uint32_t ticks(uint32_t ms) { return ms * 48000; }
 
-- *consteval* is super strict—it must run at compile time, or the code will just throw an error and fail to build.
-
-- *constexpr* is the only one that works for a math function that you want to use in two different ways: calculating a fixed delay during compile time using hardcoded numbers, but also using the exact same function to calculate a dynamic delay based on a live sensor reading at runtime.  
+constexpr uint32_t kBoot = ticks(10);   // compile time
+uint32_t d = ticks(sensorMs);           // runtime (consteval would fail here)
+```
 
 ### 5. Why `enum class` for register field values
 
-- A plain *enum* is basically just an integer in disguise. The compiler will let you accidentally compare an I2C speed enum with a completely unrelated UART parity enum, or even let you do math on them.
+- A plain `enum` converts to `int` automatically, so I can pass a raw number or mix unrelated enums (I2C speed and UART parity) without an error. Its names also leak into the surrounding scope.
+- An `enum class` is its own type. No automatic conversion, and I must write `Parity::Even`. Wrong enums or raw numbers give a compile error.
+- I can also set the size, like `uint8_t`, to match the register field.
 
-- An *enum class* locks the type down tightly. It forces you to use the exact type, meaning if a function asks for a *GpioMode*, you cannot accidentally pass a raw number or an ADC channel into it. This prevents a lot of silly hardware configuration bugs before the code even runs.  
+```cpp
+enum class Parity : uint8_t { None, Even, Odd };
+void setParity(Parity p);
+
+setParity(Parity::Even);   // ok
+// setParity(1);           // error
+```
 
 ## Errors, memory and concurrency
 
 ### 1. Error reporting without exceptions
 
-- In firmware, we usually disable exceptions because they add hidden overhead. To report errors, return codes (like returning an *int* or *enum*) are the old-school C way, but they are risky because it's easy to accidentally ignore the return value and use garbage data.
+- Exceptions are usually off in firmware (`-fno-exceptions`) because they add flash size and unpredictable timing.
+- **Return codes:** simple, but the caller can ignore them and use garbage data. `[[nodiscard]]` helps.
+- **`std::optional`:** good when "no value" is the only failure, but it does not say why.
+- **`std::variant`:** can hold a value or an error, but unpacking it is clunky.
+- **`std::expected` (C++23):** holds the value or an error code, so the caller has to unwrap it and sees the error path. Best option if the compiler supports it.
 
-- *std::optional* is great when a function might just fail to return a value (like trying to read a disconnected I2C sensor), but it doesn't tell you why it failed.
-
-- *std::variant* lets you return either a good result type or an error type, but unpacking it can feel a bit clunky.
-
-- *std::expected* (from C++23) is the best of both worlds: it holds either the expected return value or an error code, and the compiler basically forces you to handle the error path clearly. 
+```cpp
+std::expected<uint16_t, Err> readTemp() {
+    if (!ready) return std::unexpected(Err::Timeout);
+    return 250;
+}
+```
 
 ### 2. Cost of `std::function`; heap-free alternative
 
-- *std::function* is super flexible for storing callbacks, but it has a hidden cost: if the lambda or function you're passing captures too many variables, it won't fit inside *std::function*'s small internal buffer. When that happens, it secretly calls *new* to allocate memory on the heap.
+- `std::function` has a small internal buffer. If a lambda captures too much, it calls `new` on the heap. In firmware that causes fragmentation and unpredictable timing.
+- It also adds an indirect call and can throw `std::bad_function_call`.
+- Heap-free alternative: a plain function pointer plus a `void*` context. Another option is my own fixed-size wrapper with a `static_assert` on the size.
 
-- In bare-metal firmware, hidden heap allocation is usually banned because it causes memory fragmentation. A heap-free alternative is to use a basic C-style function pointer along with a void* context pointer, or to write your own custom fixed-capacity wrapper that refuses to compile if the callback is too big.   
+```cpp
+using Callback = void (*)(void* ctx);
+struct Button { Callback cb; void* ctx; };
+```
 
 ### 3. `reinterpret_cast<Packet*>(rx_buffer)`: aliasing, alignment, safe decoding
 
-- No, it is definitely not safe. First, it breaks the "strict aliasing" rule, which means the compiler assumes pointers of different types don't point to the same memory. If you break this, the optimizer might accidentally delete your memory reads because it thinks they aren't connected.
+- No, it is not safe.
+- **Aliasing:** reading a byte buffer through a `Packet*` breaks the strict aliasing rule (undefined behaviour). The optimizer may reorder or remove reads.
+- **Alignment:** the buffer may start at any address, but a `Packet` with a `uint32_t` needs an address divisible by 4. On Cortex-M0 this gives a HardFault. On M3/M4 it often works but is not safe to rely on.
+- Also padding and byte order (endianness) may not match the sender.
+- Safe way: copy the bytes into a `Packet` with `std::memcpy` (or `std::bit_cast` in C++20). The compiler makes this fast. Check the length first.
 
-- Second, there's alignment: a raw byte buffer might start at an odd memory address, but a struct with a 32-bit integer inside it needs to start at an address cleanly divisible by 4. If you cast it directly on an ARM Cortex chip like an STM32, you will trigger a hardware fault and crash the board.
-
-- The safe way is to use *std::memcpy* (or *std::bit_cast* in C++20) to copy the raw bytes from the buffer directly into a properly aligned *Packet* struct.
+```cpp
+Packet p;
+std::memcpy(&p, rx_buffer, sizeof p);   // safe copy
+```
 
 ### 4. `volatile` vs `std::atomic`; acquire/release guarantees
 
-- *volatile* just tells the compiler, "hey, don't optimize out reads/writes to this variable because hardware (like an interrupt) might change it". But it does nothing to stop two RTOS threads from trying to read and write at the exact same millisecond, causing a data race, and it doesn't stop the CPU from reordering your instructions. *std::atomic* actually guarantees thread safety at the hardware level.
+- `volatile` only stops the compiler from removing or merging reads/writes. It is for hardware registers. It does not make operations atomic and does not stop reordering, so it cannot fix data races.
+- `std::atomic` makes operations atomic and lets me choose the memory ordering. It is the right tool to share data between threads or an ISR and main code.
+- **Release (store):** all writes before it are done and visible before the store.
+- **Acquire (load):** nothing after it can move before it.
+- They work as a pair: if the acquire load sees the value from a release store, it also sees all the writes before that store.
 
-- *memory_order_acquire* ensures that any memory reads written after it in the code actually happen after it in reality.
+```cpp
+data = 42;
+ready.store(true, std::memory_order_release);      // producer
 
-- *memory_order_release* ensures that any memory writes written before it are completely finished and visible to other threads before the atomic variable gets updated.
+if (ready.load(std::memory_order_acquire)) use(data);   // consumer sees 42
+```
 
 ### 5. Placement new and static memory pools
 
-- Normally, *new* asks the operating system for a fresh chunk of heap memory. Placement *new* is a trick where you provide the memory address and say, "I already have this block of RAM, just run the constructor and build the object right here".
+- Normal `new` takes memory from the heap and then runs the constructor. Placement `new` skips the allocation. I give it an address, and it only runs the constructor there.
+- In firmware, I make a big byte array at compile time (no heap) and build objects inside it when needed. This is a static memory pool.
+- The array must be aligned (`alignas`), and I must call the destructor myself because there is no `delete`.
 
-- In firmware, we use this to build static memory pools. We pre-allocate a big raw byte array globally at compile time so we never touch the heap. Then, when we need to spin up a new task or buffer at runtime, we use placement new to safely construct it right inside that pre-allocated array.
+```cpp
+alignas(Packet) static unsigned char pool[sizeof(Packet) * 4];
+
+Packet* p = new (&pool[0]) Packet{};   // build inside the pool
+p->~Packet();                          // destroy manually
+```
