@@ -14,7 +14,20 @@
 
 using namespace fw::bus;
 
-// --- allocation counter: lets a test PROVE the bus never touches the heap ------------------
+// --- detect ThreadSanitizer (GCC and Clang spell it differently) --------------------------------
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define FW_TSAN 1
+#endif
+#endif
+#if defined(__SANITIZE_THREAD__) && !defined(FW_TSAN)
+#define FW_TSAN 1
+#endif
+
+// --- allocation counter: lets a test PROVE the bus never touches the heap ------------------------
+// Not built under ThreadSanitizer: Clang's TSan runtime already defines operator new/delete,
+// so replacing them here would be a duplicate definition at link time.
+#ifndef FW_TSAN
 static std::atomic<std::size_t> g_alloc_count{0};
 
 void* operator new(std::size_t size) {
@@ -24,6 +37,7 @@ void* operator new(std::size_t size) {
 }
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+#endif
 
 // --- helpers ------------------------------------------------------------------------------
 constexpr EventId kA = 1;
@@ -266,6 +280,7 @@ TEST_CASE("a callback may unsubscribe itself without deadlock") {
     CHECK(ctx.calls == 1u);  // the second event found no subscriber
 }
 
+#ifndef FW_TSAN  // see the note on the allocation counter above
 TEST_CASE("subscribe, publish, dispatch and unsubscribe never allocate") {
     SmallBus bus;
     Counter c;
@@ -281,6 +296,7 @@ TEST_CASE("subscribe, publish, dispatch and unsubscribe never allocate") {
     CHECK(removed);
     CHECK(after == before);
 }
+#endif
 
 // --- multi-threaded -----------------------------------------------------------------------------
 namespace stress {
