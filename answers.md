@@ -44,19 +44,38 @@
 ## Polymorphism and templates
 
 ### 1. How a vtable works; RAM/flash cost per class and per object
-TODO
+
+- A vtable is basically a hidden lookup table of function pointers that the compiler creates when you use virtual functions. When you call a virtual function, the program checks this table at runtime to figure out exactly which version of the function to run.
+
+- For the overhead, it adds one vtable per class into your flash memory, which is just a list of pointers. For your RAM, it adds one hidden pointer (called a *vptr*, usually 4 bytes on a 32-bit microcontroller) to every single object you create so the object knows where its vtable is. 
 
 ### 2. Static (templates, CRTP) vs dynamic (virtual) polymorphism
-TODO
+
+Static polymorphism using templates is super fast because the compiler figures everything out in advance and can inline the code, meaning no runtime delays. However, it takes longer to compile and causes bigger code size (bloat) because the compiler generates a brand new copy of the function for every data type you use it with.
+
+- Dynamic polymorphism (using virtual functions) gives you a lot of flexibility to swap out components at runtime—like changing which sensor is active—and keeps compile times and code size smaller. The downside is it is slightly slower at runtime because the processor has to look up the vtable every time a function is called.
 
 ### 3. Templates in headers; code bloat and how to limit it
-TODO
+
+- Templates aren't actually compiled code yet; they are just blueprints. When you try to use a template in a *.cpp* file, the compiler needs to see the full blueprint right then and there to generate the specific version of that code, which is why the whole definition has to sit in the header file.
+
+- Code bloat happens when the compiler generates tons of almost identical, fully compiled copies of your template for all the different types you used, filling up your flash memory. You can limit it by moving the parts of the code that don't depend on the template parameters out into a regular, non-templated base class so that logic only gets compiled once.
 
 ### 4. `const` vs `constexpr` vs `consteval`; a case where only `constexpr` works
-TODO
+
+- *const* just means a variable cannot be modified once it is created, but its value might only be figured out at runtime.
+
+- *constexpr* tells the compiler "if you know all the inputs right now, calculate this at compile time to save CPU cycles, but if the inputs only arrive at runtime, calculate it normally then".
+
+- *consteval* is super strict—it must run at compile time, or the code will just throw an error and fail to build.
+
+- *constexpr* is the only one that works for a math function that you want to use in two different ways: calculating a fixed delay during compile time using hardcoded numbers, but also using the exact same function to calculate a dynamic delay based on a live sensor reading at runtime.  
 
 ### 5. Why `enum class` for register field values
-TODO
+
+- A plain *enum* is basically just an integer in disguise. The compiler will let you accidentally compare an I2C speed enum with a completely unrelated UART parity enum, or even let you do math on them.
+
+- An *enum class* locks the type down tightly. It forces you to use the exact type, meaning if a function asks for a *GpioMode*, you cannot accidentally pass a raw number or an ADC channel into it. This prevents a lot of silly hardware configuration bugs before the code even runs.  
 
 ## Errors, memory and concurrency
 
