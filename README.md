@@ -69,11 +69,11 @@ Each task folder has the same shape: `include/fw/<header>.hpp` (the library) and
 
 ## Progress
 
-- [ ] Task 1: strong unit types
-- [ ] Task 2: register fields
-- [ ] Task 3: connection state machine
-- [ ] Task 4: CRTP vs virtual (with benchmark table)
-- [ ] Task 5: event bus (TSan clean)
-- [ ] Part A answers
+- [x] Task 1: strong unit types
+- [x] Task 2: register fields
+- [x] Task 3: connection state machine
+- [x] Task 4: CRTP vs virtual (with benchmark table)
+- [x] Task 5: event bus (TSan clean)
+- [x] Part A answers
 - [ ] Report and sanitizer output
 - [ ] Clean-clone build verified
