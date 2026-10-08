@@ -76,4 +76,4 @@ Each task folder has the same shape: `include/fw/<header>.hpp` (the library) and
 - [x] Task 5: event bus (TSan clean)
 - [x] Part A answers
 - [x] Report and sanitizer output
-- [ ] Clean-clone build verified
+- [x] Clean-clone build verified

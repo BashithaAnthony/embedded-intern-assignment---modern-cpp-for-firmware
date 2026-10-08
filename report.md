@@ -410,3 +410,6 @@ Total Test time (real) =   4.09 sec
 
 ## C++20 features used
 None. The code uses C++17 only.
+
+## Acknowledgements and Learning Journey
+I would like to conclude by noting that this assignment was a significant learning experience. Coming from a background where my formal programming experience was primarily in Python and Java, navigating the intricacies of modern C++ for firmware was a new challenge. To support my learning curve and help structure the code effectively, I transparently leveraged AI tools, including Claude and Gemini Pro. This approach allowed me to not only complete the technical requirements but also genuinely learn and adopt modern C++ best practices.
