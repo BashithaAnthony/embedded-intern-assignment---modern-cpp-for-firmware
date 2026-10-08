@@ -1,13 +1,11 @@
 #pragma once
 // Task 4, design 2: static polymorphism (CRTP, the Curiously Recurring Template Pattern).
-// SensorBase<Derived> forwards to Derived::do_init() / do_read() / do_name(), resolved
-// at compile time: no vtable, no vptr in the objects, and every call can be inlined.
+// SensorBase<Derived> calls Derived::do_init(), do_read() and do_name(). The call is
+// resolved at compile time: no vtable, no vptr, and the compiler can inline it.
 
-#include <cstdint>
 #include <optional>
 
 #include "fw/sensor_models.hpp"
-#include "fw/sensor_types.hpp"
 
 namespace fw {
 
@@ -19,41 +17,27 @@ public:
     const char* name() const { return self().do_name(); }
 
 private:
-    // Private constructor + friend Derived: only the class named as Derived can
-    // inherit from SensorBase<Derived>. "class A : SensorBase<B>" will not compile.
-    SensorBase() = default;
-    ~SensorBase() = default;
-    friend Derived;
-
     Derived& self() { return static_cast<Derived&>(*this); }
     const Derived& self() const { return static_cast<const Derived&>(*this); }
 };
 
-class CrtpTemperatureSensor final : public SensorBase<CrtpTemperatureSensor> {
+class CrtpTemperatureSensor : public SensorBase<CrtpTemperatureSensor> {
 public:
-    explicit CrtpTemperatureSensor(bool init_ok = true, std::uint32_t seed = 1)
-        : model_{init_ok, seed} {}
-
-private:
-    friend class SensorBase<CrtpTemperatureSensor>;
     bool do_init() { return model_.init(); }
     std::optional<Sample> do_read() { return model_.read(); }
-    const char* do_name() const { return TemperatureModel::name(); }
+    const char* do_name() const { return model_.name(); }
 
+private:
     TemperatureModel model_;
 };
 
-class CrtpPressureSensor final : public SensorBase<CrtpPressureSensor> {
+class CrtpPressureSensor : public SensorBase<CrtpPressureSensor> {
 public:
-    explicit CrtpPressureSensor(bool init_ok = true, std::uint32_t seed = 2)
-        : model_{init_ok, seed} {}
-
-private:
-    friend class SensorBase<CrtpPressureSensor>;
     bool do_init() { return model_.init(); }
     std::optional<Sample> do_read() { return model_.read(); }
-    const char* do_name() const { return PressureModel::name(); }
+    const char* do_name() const { return model_.name(); }
 
+private:
     PressureModel model_;
 };
 

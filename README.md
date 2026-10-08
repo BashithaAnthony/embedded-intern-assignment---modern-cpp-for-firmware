@@ -75,5 +75,5 @@ Each task folder has the same shape: `include/fw/<header>.hpp` (the library) and
 - [x] Task 4: CRTP vs virtual (with benchmark table)
 - [x] Task 5: event bus (TSan clean)
 - [x] Part A answers
-- [ ] Report and sanitizer output
+- [x] Report and sanitizer output
 - [ ] Clean-clone build verified
